@@ -1,4 +1,5 @@
 //Релиз от 06,03,2023    Ver.10.2
+#include <Arduino.h>
 #include "ASetting.h"
 // Используемые библиотеки -----------------------------
 #include <stdint.h>
@@ -87,6 +88,40 @@ int Pr_Line_M[10][4];
   String IPlocal;
 #endif
 hw_timer_t *Timer0_Cfg = NULL;
+
+// --------------------------------------------
+void OutPWR_TOP() {
+  reg1 = round(Output1) + er1; //pwr- задание выходной мощности в %,в текущем шаге профиля, er- ошибка округления
+  if (reg1 < 50) {
+    out1 = LOW;
+    er1 = reg1; // reg- переменная для расчетов
+  }
+  else {
+    out1 = HIGH;
+    er1 = reg1 - 100;
+  }
+  digitalWrite(RelayPin1, out1); //пин через который осуществляется дискретное управление
+}
+
+//---------------------------------------------
+void OutPWR_BOTTOM() {
+  reg2 = round(Output2) + er2; //pwr- задание выходной мощности в %, er- ошибка округления
+  if (reg2 < 50) {
+    out2 = LOW;
+    er2 = reg2; // reg- переменная для расчетов
+  }
+  else {
+    out2 = HIGH;
+    er2 = reg2 - 100;
+  }
+  digitalWrite(RelayPin2, out2); //пин через который осуществляется дискретное управление
+}
+
+// --------------------------------------------
+void Dimming() {
+  OutPWR_TOP();
+  OutPWR_BOTTOM();
+}
 
 void IRAM_ATTR Timer0_ISR()
 {
@@ -189,6 +224,66 @@ void ButRight() {   //    "Button - RIGHT"
       break;
     } // end switch
 }
+
+// ------------------------------
+void loadProfile(byte NnProf) {     //  загрузка текущего профиля
+  DuStr = "";
+  String DuVr;
+  for (byte j = 0; j <= SizePrrof - 1; j++) {
+    u.Mode[j] = EEPROM.read(Adres + ((NnProf - 1) * SizePrrof) + j);
+  }
+  for (j = 0; j < 6; j++) {
+    ArObsi[j] = EEPROM.read(numMax*SizePrrof + Adres+1 + j);   
+  }
+  #ifdef Debug
+    Serial.print(numMax*SizePrrof + Adres+1); Serial.print(" -"); Serial.println(ArObsi[j]);
+  #endif
+
+  DuVr = String(u.Profili.HeadProf);
+  if (u.Mode[1] == 255)  DuStr += "НЕИЗВЕСТНЫЙ ПРОФИЛЬ " + String(NnProf) + " ";
+  else {
+    for (byte i = 0; i < ArrMax; i++) {
+      if (DuVr.substring(i, i + 1) == "\0" || DuVr.substring(i, i + 1) == "\n") {
+        DuStr += DuVr.substring(0, i+1);
+        DuStr += "\0";
+        i = ArrMax;
+      }
+    }
+  }
+  if (DuStr.length() == 0) DuStr += "НЕИЗВЕСТНЫЙ ПРОФИЛЬ " + String(NnProf) + " ";
+  ArObsi[1] = NnProf;
+   #ifdef Debug
+    Serial.print(DuStr.length()); Serial.print(" -"); Serial.print(DuStr); Serial.println("-");
+    DumpMem(NnProf);
+   #endif
+}
+
+// --------------------------------------------
+void VievTemp() {                   // вывод температуры профиля на главный экран
+  // myGLCD.setFont(BigFont);
+  myGLCD.setColor(VGA_SILVER);
+  myGLCD.printNumF(u.Profili.rampRateBOTTOM * 0.1, 0, 383, 75);
+  myGLCD.printNumF(u.Profili.rampRateStep[0] * 0.1, 0, 0, 75);
+  j = 0;
+  for (i = 0; i < 4; i++) {
+    if (u.Profili.temperatureStep[i] > j) j = u.Profili.temperatureStep[i];
+  }
+  myGLCD.printNumI(j, 0, 95, 3, '0');
+  myGLCD.printNumI(u.Profili.temperatureBOTTOM, 410, 95, 3, '0');
+}
+
+// --------------------------------------------
+void PrPrint(int X, int Y) {        // номер и название профиля
+  myGLCD.setColor(VGA_BLACK);
+  myGLCD.fillRoundRect(X, Y, 479 - X - 1, Y + 15);
+  // myGLCD.setFont(BigFont);
+  myGLCD.setColor(VGA_ORAN);
+  myGLCD.printNumI(currentProfile, X, Y, 2);
+  // myGLCD.setFont(BigFontRus);
+  myGLCD.setColor(VGA_LIME);
+  myGLCD.print(DuStr, X + 40, Y);
+}
+
 //---------------------------------------------
 void ButUp()    {    //    "Button - UP"
   switch (reflowState) {          //  переключатель состояния
@@ -334,6 +429,58 @@ void ButDown()  {    //    "Button - DOWN"
       break;
   } // end switch
 }
+// --------------------------------------------
+void SaveProfile(byte NnProf) {     //  сохранение текущего профиля
+ #ifdef Debug
+   Serial.print("SaveProfile >> "); Serial.println(NnProf);
+ #endif
+  for (byte j = 0; j <= SizePrrof - 1; j++) {    //j = ArrMax - 1  без заголовка
+    #if defined(__AVR__)
+      EEPROM.update(Adres + ((NnProf - 1)*SizePrrof) + j, u.Mode[j]);
+    #elif defined(ESP8266) || defined(ESP32)
+      EEPROM.write(Adres + ((NnProf - 1)*SizePrrof) + j, u.Mode[j]);
+      EEPROM.commit();
+    #endif
+   }
+  for (j = 0; j < 6; j++) {
+     #if defined(__AVR__)
+       EEPROM.update(numMax*SizePrrof + Adres+1 +j, ArObsi[j]);
+     #elif defined(ESP8266) || defined(ESP32) 
+       EEPROM.write(numMax*SizePrrof + Adres+1 +j, ArObsi[j]);
+       EEPROM.commit();
+     #endif    
+  }
+}
+
+// --------------------------------------------
+void Ramka(int i, word color) {
+  myGLCD.setColor(color);
+  if (i==5) {
+    myGLCD.drawCircle(xpos, ypos, 50); 
+   } else {
+    myGLCD.drawRoundRect(BattSet[i][0], BattSet[i][1], BattSet[i][2], BattSet[i][3]);
+    myGLCD.drawRoundRect(BattSet[i][0] + 1, BattSet[i][1] + 1, BattSet[i][2] - 1, BattSet[i][3] - 1);
+   }
+}
+
+void TimTouSet() {
+  TouchSet = millis() + 250; 
+  return;
+}
+
+// --------------------------------------------
+void WinRamka (int KorX, int KorY, int DLX, int DLY, word Color, bool Clean) {
+  if (Clean) {
+     myGLCD.setColor(Color);
+     myGLCD.fillRoundRect(KorX, KorY, KorX+DLX, KorY+DLY);
+    }
+    else {
+      myGLCD.setColor(Color);  
+      myGLCD.drawRoundRect(KorX, KorY, KorX+DLX, KorY+DLY);
+      myGLCD.drawRoundRect(KorX+1, KorY+1, KorX+DLX-1, KorY+DLY-1); 
+    }
+}
+
 //---------------------------------------------
 void ButLeft()  {    //    "Button - LEFT"
   switch (reflowState) {          //  переключатель состояния
@@ -387,6 +534,21 @@ void ButLeft()  {    //    "Button - LEFT"
       break;
   } // end switch
 } 
+
+// --------------------------------------------
+void WrLoadPr (byte Pr_Out, byte Pr_In) {
+  for (j=0; j<ArrMax; j++) u.Profili.HeadProf[j]=32;
+  #if defined(__AVR__)
+    strcpy_P(u.Profili.HeadProf, (char *)pgm_read_word(&(AdrProfN[Pr_In-1])));  //  пишем в буфер
+  #elif defined(ESP8266) || defined(ESP32)
+    strcpy_P(u.Profili.HeadProf, ((const char *)AdrProfN[Pr_In-1]));  //  пишем в буфер
+  #endif
+  for (j=1; j<=(SizePrrof-ArrMax); j++) {
+    u.Mode[ArrMax+j-1] = pgm_read_byte_near(ProfDate[Pr_In-1]+j);
+    } 
+  SaveProfile(Pr_Out);
+}
+
 //---------------------------------------------
 void ButOk()    {    //    "Button - OK"
   switch (reflowState) {          //  переключатель состояния
@@ -502,37 +664,7 @@ void ProfEdit_2() {                 //  начало экрана настрое
   #endif  
   updateScreen = false;
 }
-// --------------------------------------------
-void Dimming() {
-  OutPWR_TOP();
-  OutPWR_BOTTOM();
-}
-// --------------------------------------------
-void OutPWR_TOP() {
-  reg1 = round(Output1) + er1; //pwr- задание выходной мощности в %,в текущем шаге профиля, er- ошибка округления
-  if (reg1 < 50) {
-    out1 = LOW;
-    er1 = reg1; // reg- переменная для расчетов
-  }
-  else {
-    out1 = HIGH;
-    er1 = reg1 - 100;
-  }
-  digitalWrite(RelayPin1, out1); //пин через который осуществляется дискретное управление
-}
-//---------------------------------------------
-void OutPWR_BOTTOM() {
-  reg2 = round(Output2) + er2; //pwr- задание выходной мощности в %, er- ошибка округления
-  if (reg2 < 50) {
-    out2 = LOW;
-    er2 = reg2; // reg- переменная для расчетов
-  }
-  else {
-    out2 = HIGH;
-    er2 = reg2 - 100;
-  }
-  digitalWrite(RelayPin2, out2); //пин через который осуществляется дискретное управление
-}
+
 //---------------------------------------------
 byte Pid1(double temp, double ust, byte kP, byte kI, byte kd)   { // верх
   byte out = 0;
@@ -564,16 +696,6 @@ byte Pid2(double temp, double ust, byte kP, byte kI, byte kd)   { // низ
   return out;
 }
 // --------------------------------------------
-void Ramka(int i, word color) {
-  myGLCD.setColor(color);
-  if (i==5) {
-    myGLCD.drawCircle(xpos, ypos, 50); 
-   } else {
-    myGLCD.drawRoundRect(BattSet[i][0], BattSet[i][1], BattSet[i][2], BattSet[i][3]);
-    myGLCD.drawRoundRect(BattSet[i][0] + 1, BattSet[i][1] + 1, BattSet[i][2] - 1, BattSet[i][3] - 1);
-   }
-}
-// --------------------------------------------
 #if defined(__AVR__)
 void printFromPGM (int charMap, int xx, int yy) {
   strcpy_P(buffer, pgm_read_word(charMap));
@@ -597,19 +719,6 @@ int stlenFromPGM (int charMap) {
     if (buffer[i] != char(0xD0) && buffer[i] != char(0xD1)) klen++;
     } while (buffer[i++] != NULL);
   return(klen-1);
-}
-// --------------------------------------------
-void VievTemp() {                   // вывод температуры профиля на главный экран
-  // myGLCD.setFont(BigFont);
-  myGLCD.setColor(VGA_SILVER);
-  myGLCD.printNumF(u.Profili.rampRateBOTTOM * 0.1, 0, 383, 75);
-  myGLCD.printNumF(u.Profili.rampRateStep[0] * 0.1, 0, 0, 75);
-  j = 0;
-  for (i = 0; i < 4; i++) {
-    if (u.Profili.temperatureStep[i] > j) j = u.Profili.temperatureStep[i];
-  }
-  myGLCD.printNumI(j, 0, 95, 3, '0');
-  myGLCD.printNumI(u.Profili.temperatureBOTTOM, 410, 95, 3, '0');
 }
 // --------------------------------------------
 void GlabPrint() {                  // главный экран
@@ -656,17 +765,6 @@ void GlabPrint() {                  // главный экран
   updateScreen = false;
 }
 // --------------------------------------------
-void PrPrint(int X, int Y) {        // номер и название профиля
-  myGLCD.setColor(VGA_BLACK);
-  myGLCD.fillRoundRect(X, Y, 479 - X - 1, Y + 15);
-  // myGLCD.setFont(BigFont);
-  myGLCD.setColor(VGA_ORAN);
-  myGLCD.printNumI(currentProfile, X, Y, 2);
-  // myGLCD.setFont(BigFontRus);
-  myGLCD.setColor(VGA_LIME);
-  myGLCD.print(DuStr, X + 40, Y);
-}
-// --------------------------------------------
 void DumpMem (byte NnProf) {        // читаем ПЗУ в СОМ порт
 
   // Для экономии места все Serial закомментированы
@@ -708,60 +806,7 @@ void DumpMem (byte NnProf) {        // читаем ПЗУ в СОМ порт
     Serial.println("");
   #endif
 }
-// ------------------------------
-void loadProfile(byte NnProf) {     //  загрузка текущего профиля
-  DuStr = "";
-  String DuVr;
-  for (byte j = 0; j <= SizePrrof - 1; j++) {
-    u.Mode[j] = EEPROM.read(Adres + ((NnProf - 1) * SizePrrof) + j);
-  }
-  for (j = 0; j < 6; j++) {
-    ArObsi[j] = EEPROM.read(numMax*SizePrrof + Adres+1 + j);   
-  }
-  #ifdef Debug
-    Serial.print(numMax*SizePrrof + Adres+1); Serial.print(" -"); Serial.println(ArObsi[j]);
-  #endif
 
-  DuVr = String(u.Profili.HeadProf);
-  if (u.Mode[1] == 255)  DuStr += "НЕИЗВЕСТНЫЙ ПРОФИЛЬ " + String(NnProf) + " ";
-  else {
-    for (byte i = 0; i < ArrMax; i++) {
-      if (DuVr.substring(i, i + 1) == "\0" || DuVr.substring(i, i + 1) == "\n") {
-        DuStr += DuVr.substring(0, i+1);
-        DuStr += "\0";
-        i = ArrMax;
-      }
-    }
-  }
-  if (DuStr.length() == 0) DuStr += "НЕИЗВЕСТНЫЙ ПРОФИЛЬ " + String(NnProf) + " ";
-  ArObsi[1] = NnProf;
-   #ifdef Debug
-    Serial.print(DuStr.length()); Serial.print(" -"); Serial.print(DuStr); Serial.println("-");
-    DumpMem(NnProf);
-   #endif
-}
-// --------------------------------------------
-void SaveProfile(byte NnProf) {     //  сохранение текущего профиля
- #ifdef Debug
-   Serial.print("SaveProfile >> "); Serial.println(NnProf);
- #endif
-  for (byte j = 0; j <= SizePrrof - 1; j++) {    //j = ArrMax - 1  без заголовка
-    #if defined(__AVR__)
-      EEPROM.update(Adres + ((NnProf - 1)*SizePrrof) + j, u.Mode[j]);
-    #elif defined(ESP8266) || defined(ESP32)
-      EEPROM.write(Adres + ((NnProf - 1)*SizePrrof) + j, u.Mode[j]);
-      EEPROM.commit();
-    #endif
-   }
-  for (j = 0; j < 6; j++) {
-     #if defined(__AVR__)
-       EEPROM.update(numMax*SizePrrof + Adres+1 +j, ArObsi[j]);
-     #elif defined(ESP8266) || defined(ESP32) 
-       EEPROM.write(numMax*SizePrrof + Adres+1 +j, ArObsi[j]);
-       EEPROM.commit();
-     #endif    
-  }
-}
 // --------------------------------------------
 void In_Line(int t_start) {         //  рисуем профиль на графике
   int Temp_Start = t_start, Temp_End;
@@ -871,6 +916,17 @@ void Pr_Ramka_Y (int i) {           //  рисуем желтую рамку б�
   myGLCD.drawLine(Xsize * i + 2, Yset, Xsize * (i + 1) - 3, Yset);
   myGLCD.drawLine(Xsize * i + 1, Yset + 1, Xsize * (i + 1) - 2, Yset + 1); //2
 }
+
+// --------------------------------------------
+void SetStrL (bool Vk_L) {      // Боковая красная линия признак нахождения в нижнем меню
+  Svkl_L = Vk_L;
+  if (!Vk_L) myGLCD.setColor(VGA_BLACK);
+  else myGLCD.setColor(VGA_RED);
+  myGLCD.drawLine(3, Ywin1, 3, 316);
+  myGLCD.drawLine(4, Ywin1, 4, 316);                     //2
+  myGLCD.drawLine(5, Ywin1, 5, 316);
+}
+
 // --------------------------------------------
 void K_Setka() {
   myGLCD.setFont(SmallFont);
@@ -1028,15 +1084,6 @@ void TimeLine(int XT) {
   myGLCD.setColor(VGA_ORAN);
 }
 // --------------------------------------------
-void SetStrL (bool Vk_L) {      // Боковая красная линия признак нахождения в нижнем меню
-  Svkl_L = Vk_L;
-  if (!Vk_L) myGLCD.setColor(VGA_BLACK);
-  else myGLCD.setColor(VGA_RED);
-  myGLCD.drawLine(3, Ywin1, 3, 316);
-  myGLCD.drawLine(4, Ywin1, 4, 316);                     //2
-  myGLCD.drawLine(5, Ywin1, 5, 316);
-}
-// --------------------------------------------
 void TempBraze () {
   if (tc2<0) {
     // myGLCD.setFont(BigFont);
@@ -1108,31 +1155,6 @@ void HeartPic () {
 
     delay(3000);   
   // TonGo();       //Мелодия приветствия Марио
-}
-// --------------------------------------------
-void WinRamka (int KorX, int KorY, int DLX, int DLY, word Color, bool Clean) {
-  if (Clean) {
-     myGLCD.setColor(Color);
-     myGLCD.fillRoundRect(KorX, KorY, KorX+DLX, KorY+DLY);
-    }
-    else {
-      myGLCD.setColor(Color);  
-      myGLCD.drawRoundRect(KorX, KorY, KorX+DLX, KorY+DLY);
-      myGLCD.drawRoundRect(KorX+1, KorY+1, KorX+DLX-1, KorY+DLY-1); 
-    }
-}
-// --------------------------------------------
-void WrLoadPr (byte Pr_Out, byte Pr_In) {
-  for (j=0; j<ArrMax; j++) u.Profili.HeadProf[j]=32;
-  #if defined(__AVR__)
-    strcpy_P(u.Profili.HeadProf, (char *)pgm_read_word(&(AdrProfN[Pr_In-1])));  //  пишем в буфер
-  #elif defined(ESP8266) || defined(ESP32)
-    strcpy_P(u.Profili.HeadProf, ((const char *)AdrProfN[Pr_In-1]));  //  пишем в буфер
-  #endif
-  for (j=1; j<=(SizePrrof-ArrMax); j++) {
-    u.Mode[ArrMax+j-1] = pgm_read_byte_near(ProfDate[Pr_In-1]+j);
-    } 
-  SaveProfile(Pr_Out);
 }
 //---------------------------------------------
 byte GetTempBot (int cont) {
@@ -1207,10 +1229,6 @@ bool TouchGet() {
     return (false);
 }
 #endif
-void TimTouSet() {
-  TouchSet = millis() + 250; 
-  return;
-}
 // --------------------------------------------
 #ifdef Set_Touch
 bool KnTouchGet(byte n) {
